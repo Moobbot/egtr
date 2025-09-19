@@ -14,7 +14,8 @@ import torch
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from pytorch_lightning.loggers import TensorBoardLogger
+# from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.strategies.ddp import DDPStrategy
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
 from torch.utils.data import DataLoader
@@ -260,6 +261,8 @@ class SGG(pl.LightningModule):
             )
             self.initialized_keys = []
         else:
+            
+            
             self.model, load_info = DetrForSceneGraphGeneration.from_pretrained(
                 pretrained,
                 config=config,
@@ -304,6 +307,7 @@ class SGG(pl.LightningModule):
         pixel_values = batch["pixel_values"]
         pixel_mask = batch["pixel_mask"]
         labels = batch["labels"]
+        # import IPython; IPython.embed()
 
         outputs = self.model(
             pixel_values=pixel_values,
@@ -313,12 +317,15 @@ class SGG(pl.LightningModule):
             output_attention_states=True,
             output_hidden_states=True,
         )
+
         loss = outputs.loss
         loss_dict = outputs.loss_dict
         del outputs
         return loss, loss_dict
 
     def training_step(self, batch, batch_idx):
+        # import IPython; IPython.embed()
+        
         loss, loss_dict = self.common_step(batch, batch_idx)
         # logs metrics for each training_step,
         # and the average across the epoch
@@ -327,10 +334,11 @@ class SGG(pl.LightningModule):
             "training_loss": loss.item(),
         }
         log_dict.update({f"training_{k}": v.item() for k, v in loss_dict.items()})
-        self.log_dict(log_dict)
+        self.log_dict(log_dict, on_epoch=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
+        # import IPython; IPython.embed()
         loss, loss_dict = self.common_step(batch, batch_idx)
         loss_dict["loss"] = loss
         del loss
@@ -345,11 +353,11 @@ class SGG(pl.LightningModule):
             log_dict[f"validation_" + k] = (
                 torch.stack([x[k] for x in outputs]).mean().item()
             )
-        self.log_dict(log_dict, on_epoch=True)
+        self.log_dict(log_dict, on_epoch=True, sync_dist=True)
 
     @rank_zero_only
     def on_train_start(self) -> None:
-        self.config.save_pretrained(self.logger.log_dir)
+        self.config.save_pretrained(self.logger.save_dir)
         return super().on_train_start()
 
     def test_step(self, batch, batch_idx):
@@ -420,7 +428,7 @@ class SGG(pl.LightningModule):
         if self.oi_evaluator is not None:
             metrics = self.oi_evaluator.aggregate_metrics()
             log_dict.update(metrics)
-        self.log_dict(log_dict, on_epoch=True)
+        self.log_dict(log_dict, on_epoch=True, sync_dist=True)
         return log_dict
 
     def configure_optimizers(self):
@@ -582,7 +590,7 @@ if __name__ == "__main__":
     )
 
     # Dataset
-    if "visual_genome" in args.data_path:
+    if "viet_sgg" in args.data_path:
         train_dataset = VGDataset(
             data_folder=args.data_path,
             feature_extractor=feature_extractor_train,
@@ -646,6 +654,7 @@ if __name__ == "__main__":
     coco_evaluator = None
     oi_evaluator = None
 
+
     multiple_sgg_evaluator_list = []
     single_sgg_evaluator_list = []
     if args.eval_when_train_end:
@@ -673,7 +682,7 @@ if __name__ == "__main__":
                         BasicSceneGraphEvaluator.all_modes(multiple_preds=False),
                     )
                 )
-        if "visual_genome" in args.data_path:
+        if "viet_sgg" in args.data_path:
             coco_evaluator = CocoEvaluator(
                 val_dataset.coco, ["bbox"]
             )  # initialize evaluator with ground truths
@@ -696,14 +705,17 @@ if __name__ == "__main__":
     else:
         version = None  #  If version is not specified the logger inspects the save directory for existing versions, then automatically assigns the next available version.
 
+    print("save_dir:", save_dir)
     # Trainer setting
-    logger = TensorBoardLogger(save_dir, name=name, version=version)
-    if os.path.exists(f"{logger.log_dir}/checkpoints"):
-        if os.path.exists(f"{logger.log_dir}/checkpoints/last.ckpt"):
-            ckpt_path = f"{logger.log_dir}/checkpoints/last.ckpt"
+    # logger = TensorBoardLogger(save_dir, name=name, version=version)
+    # print("name:", name)
+    logger = WandbLogger(save_dir=save_dir, name=name, project='vrd', version=version)
+    if os.path.exists(f"{logger.save_dir}/checkpoints"):
+        if os.path.exists(f"{logger.save_dir}/checkpoints/last.ckpt"):
+            ckpt_path = f"{logger.save_dir}/checkpoints/last.ckpt"
         else:
             ckpt_path = sorted(
-                glob(f"{logger.log_dir}/checkpoints/epoch=*.ckpt"),
+                glob(f"{logger.save_dir}/checkpoints/epoch=*.ckpt"),
                 key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
             )[-1]
     else:
@@ -762,9 +774,12 @@ if __name__ == "__main__":
     if not args.skip_train:
         # Main training
         if not Path(
-            TensorBoardLogger(
-                save_dir, name=f"{name}__finetune", version=version
-            ).log_dir
+            # TensorBoardLogger(
+            #     save_dir, name=f"{name}__finetune", version=version
+            # ).log_dir
+            WandbLogger(
+                save_dir=save_dir, name=f"{name}__finetune", version=version
+            ).save_dir
         ).exists():
             # Training
             trainer = Trainer(
@@ -783,22 +798,25 @@ if __name__ == "__main__":
             trainer.fit(module, ckpt_path=ckpt_path)
 
             try:
-                os.chmod(logger.log_dir, 0o0777)
+                os.chmod(logger.save_dir, 0o0777)
             except PermissionError as e:
                 print(e)
 
         if args.finetune:
             ckpt_path = sorted(  # load best model
-                glob(f"{logger.log_dir}/checkpoints/epoch=*.ckpt"),
+                glob(f"{logger.save_dir}/checkpoints/epoch=*.ckpt"),
                 key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
             )[-1]
 
             # Finetune trainer setting
-            logger = TensorBoardLogger(
-                save_dir, name=f"{name}__finetune", version=version
+            # logger = TensorBoardLogger(
+            #     save_dir, name=f"{name}__finetune", version=version
+            # )
+            logger = WandbLogger(
+                save_dir=save_dir, name=f"{name}__finetune", version=version
             )
-            if os.path.exists(f"{logger.log_dir}/checkpoints"):
-                finetune_ckpt_path = f"{logger.log_dir}/checkpoints/last.ckpt"
+            if os.path.exists(f"{logger.save_dir}/checkpoints"):
+                finetune_ckpt_path = f"{logger.save_dir}/checkpoints/last.ckpt"
             else:
                 finetune_ckpt_path = None
 
@@ -872,22 +890,37 @@ if __name__ == "__main__":
         if trainer is not None:
             torch.distributed.destroy_process_group()
             try:
-                os.chmod(logger.log_dir, 0o0777)
+                os.chmod(logger.save_dir, 0o0777)
             except PermissionError as e:
                 print(e)
 
     # Evaluation
     if args.eval_when_train_end and (trainer is None or trainer.is_global_zero):
         if args.skip_train and args.finetune:
-            logger = TensorBoardLogger(
-                save_dir, name=f"{name}__finetune", version=version
+            # logger = TensorBoardLogger(
+            #     save_dir, name=f"{name}__finetune", version=version
+            # )
+            logger = WandbLogger(
+                save_dir=save_dir, name=f"{name}__finetune", version=version
             )
 
         # Load best model
-        ckpt_path = sorted(
-            glob(f"{logger.log_dir}/checkpoints/epoch=*.ckpt"),
-            key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
-        )[-1]
+        # ckpt_path = sorted(
+        #     glob(f"{logger.save_dir}/checkpoints/epoch=*.ckpt"),
+        #     key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
+        # )[-1]
+        
+        # epoch_ckpts = sorted(
+        #     glob(f"{logger.save_dir}/checkpoints/epoch=*.ckpt"),
+        #     key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
+        # )
+        # if len(epoch_ckpts) > 0:
+        #     ckpt_path = epoch_ckpts[-1]
+        # else:
+        #     print("⚠️ Không tìm thấy epoch=*.ckpt → fallback về last.ckpt")
+        #     ckpt_path = f"{logger.save_dir}/checkpoints/last.ckpt"
+        ckpt_path = "output/vietsgg/egtr__batch__32__epochs__150_50__lr__1e-05_0.0001__visual_genome__finetune__version_0__/vrd/21ik1yeg/checkpoints/epoch=03-validation_loss=2.66.ckpt"
+        print("✅ Đang sử dụng checkpoint:", ckpt_path) 
         state_dict = torch.load(ckpt_path, map_location="cpu")["state_dict"]
         for k in list(state_dict.keys()):
             state_dict[k[6:]] = state_dict.pop(k)  # "model."
@@ -897,7 +930,7 @@ if __name__ == "__main__":
         trainer = Trainer(
             precision=args.precision, logger=logger, gpus=1, max_epochs=-1
         )
-        if "visual_genome" in args.data_path:
+        if "viet_sgg" in args.data_path:
             test_dataset = VGDataset(
                 data_folder=args.data_path,
                 feature_extractor=feature_extractor,

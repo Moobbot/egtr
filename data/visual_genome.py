@@ -106,12 +106,38 @@ def vg_get_statistics(train_data, must_overlap=True):
 
         target = train_data.coco.loadAnns(train_data.coco.getAnnIds(image_id))
         gt_classes = np.array(list(map(lambda x: x["category_id"], target)))
+        
+        
+        # Tạo object_id → index
+        object_id_to_idx = {ann["id"]: idx for idx, ann in enumerate(target)}
+                
+        # rel_list dùng object_id: [subj_id, obj_id, pred_id]
         rel_list = rel[str(image_id)]
-        gt_indices = np.array(torch.Tensor(rel_list).T, dtype="int64")
+        
+        new_rel_list = []
+        for rel_triple in rel_list:
+            subj_id, obj_id, pred = rel_triple
+            if subj_id in object_id_to_idx and obj_id in object_id_to_idx:
+                new_rel_list.append([
+                    object_id_to_idx[subj_id],
+                    object_id_to_idx[obj_id],
+                    pred
+                ])
+        # rel_list = rel[image_id_str]
+        # gt_indices = np.array(torch.Tensor(rel_list).T, dtype="int64")
+        gt_indices = np.array(new_rel_list).T.astype(np.int64)
         gt_indices[-1, :] -= 1
-
+        # import IPython; IPython.embed()
         # foreground
         o1o2 = gt_classes[gt_indices[:2, :]].T
+        # try:
+        #     o1o2 = gt_classes[gt_indices[:2, :]].T
+        # except IndexError as e:
+        #     print(f"image_id = {image_id}")
+        #     print(f"gt_classes.shape = {gt_classes.shape}")
+        #     print(f"gt_indices = {gt_indices}")
+        #     raise e  # vẫn để raise để biết nơi phát sinh lỗi
+
         for (o1, o2), gtr in zip(o1o2, gt_indices[2]):
             fg_matrix[o1 - 1, o2 - 1, gtr] += 1
 

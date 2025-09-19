@@ -2558,6 +2558,9 @@ class DeformableDetrForObjectDetection(DeformableDetrPreTrainedModel):
         logits = outputs_class[:, -1]
         pred_boxes = outputs_coord[:, -1]
 
+        print("Debugging")
+        import IPython; IPython.embed()
+
         loss, loss_dict, auxiliary_outputs = None, None, None
         if labels is not None:
             # First: create the matcher

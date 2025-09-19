@@ -269,7 +269,7 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
             return_dict=return_dict,
         )
 
-        sequence_output = outputs["last_hidden_state"]
+        sequence_output = outputs["last_hidden_state"] # [bsz, num_queries, d_model] [1, 200, 256]
         bsz = sequence_output.size(0)
         hidden_states = (
             outputs.intermediate_hidden_states if return_dict else outputs[2]
@@ -280,6 +280,7 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
         )
 
         # class logits + predicted bounding boxes
+        # Object Detection
         outputs_classes = []
         outputs_coords = []
 
@@ -310,8 +311,11 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
         outputs_coord = torch.stack(outputs_coords, dim=1)
         del outputs_classes, outputs_coords
 
-        logits = outputs_class[:, -1]
-        pred_boxes = outputs_coord[:, -1]
+        logits = outputs_class[:, -1] # [bsz, num_queries, num_classes] [1, 200, 150]
+        pred_boxes = outputs_coord[:, -1] # [bsz, num_queries, 4] [1, 200, 4]
+
+        # print("debugging")
+        # import IPython; IPython.embed()
 
         if self.config.auxiliary_loss:
             outputs_class = outputs_class[:, : self.config.decoder_layers, ...]
@@ -325,12 +329,14 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
         # Get self-attention byproducts from deformable detr
         decoder_attention_queries = outputs[
             "decoder_attention_queries"
-        ]  # tuple of [bsz, num_heads, num_object_queries, d_head]
+        ]  # tuple of [bsz, num_heads, num_object_queries, d_head] (1, 8, 200, 32)
         outputs["decoder_attention_queries"] = None
         decoder_attention_keys = outputs[
             "decoder_attention_keys"
-        ]  # tuple of [bsz, num_heads, num_object_queries, d_head]
+        ]  # tuple of [bsz, num_heads, num_object_queries, d_head] (1, 8, 200, 32)
         outputs["decoder_attention_keys"] = None
+
+        # import IPython; IPython.embed()
 
         # Unscaling & stacking attention queries
         projected_q = []
@@ -345,7 +351,7 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
             )
         decoder_attention_queries = torch.stack(
             projected_q, -2
-        )  # [bsz, num_object_queries, num_layers, d_model]
+        )  # [bsz, num_object_queries, num_layers, d_model] [1, 200, 6, 256]
         del projected_q
 
         # Stacking attention keys
@@ -360,19 +366,19 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
             )
         decoder_attention_keys = torch.stack(
             projected_k, -2
-        )  # [bsz, num_object_queries, num_layers, d_model]
+        )  # [bsz, num_object_queries, num_layers, d_model] [1, 200, 6, 256]
         del projected_k
 
         # Pairwise concatenation
         decoder_attention_queries = decoder_attention_queries.unsqueeze(2).repeat(
             1, 1, num_object_queries, 1, 1
-        )
+        ) # [bsz, num_object_queries, num_object_queries, num_layers, d_model] [1, 200, 200, 6, 256]
         decoder_attention_keys = decoder_attention_keys.unsqueeze(1).repeat(
             1, num_object_queries, 1, 1, 1
-        )
+        ) # [bsz, num_object_queries, num_object_queries, num_layers, d_model] [1, 200, 200, 6, 256]
         relation_source = torch.cat(
             [decoder_attention_queries, decoder_attention_keys], dim=-1
-        )  # [bsz, num_object_queries, num_object_queries, num_layers, 2*d_model]
+        )  # [bsz, num_object_queries, num_object_queries, num_layers, 2*d_model] [1, 200, 200, 6, 512]
         del decoder_attention_queries, decoder_attention_keys
 
         # Use final hidden representations
@@ -386,6 +392,9 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
             .unsqueeze(1)
             .repeat(1, num_object_queries, 1, 1)
         )
+
+        # import IPython; IPython.embed()
+
         del sequence_output
         relation_source = torch.cat(
             [
@@ -393,7 +402,9 @@ class DetrForSceneGraphGeneration(DeformableDetrPreTrainedModel):
                 torch.cat([subject_output, object_output], dim=-1).unsqueeze(-2),
             ],
             dim=-2,
-        )
+        ) # [bsz, num_object_queries, num_object_queries, num_layers + 1, 2*d_model+2*d_model] [1, 200, 200, 7, 512](add representation of last layer)
+
+        # import IPython; IPython.embed()
         del subject_output, object_output
 
         # Gated sum

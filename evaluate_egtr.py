@@ -141,7 +141,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     # Path
-    parser.add_argument("--data_path", type=str, default="dataset/visual_genome")
+    parser.add_argument("--data_path", type=str, default="viet_sgg")
     parser.add_argument(
         "--artifact_path",
         type=str,
@@ -176,7 +176,7 @@ if __name__ == "__main__":
     )
 
     # Dataset
-    if "visual_genome" in args.data_path:
+    if "viet_sgg" in args.data_path:
         test_dataset = VGDataset(
             data_folder=args.data_path,
             feature_extractor=feature_extractor,
@@ -229,6 +229,8 @@ if __name__ == "__main__":
     model = DetrForSceneGraphGeneration.from_pretrained(
         args.architecture, config=config, ignore_mismatched_sizes=True
     )
+
+    # print(f"{args.artifact_path}/checkpoints/epoch=*.ckpt")
     ckpt_path = sorted(
         glob(f"{args.artifact_path}/checkpoints/epoch=*.ckpt"),
         key=lambda x: int(x.split("epoch=")[1].split("-")[0]),
