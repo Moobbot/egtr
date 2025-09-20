@@ -270,7 +270,7 @@ if __name__ == "__main__":
     )
 
     # Dataset
-    if "visual_genome" in args.data_path:
+    if "viet_sgg" in args.data_path:
         train_dataset = VGDetection(
             data_folder=args.data_path,
             feature_extractor=feature_extractor_train,
@@ -317,7 +317,7 @@ if __name__ == "__main__":
 
     # Evaluator
     if args.eval_when_train_end:
-        if "visual_genome" in args.data_path:
+        if "viet_sgg" in args.data_path:
             coco_evaluator = CocoEvaluator(
                 val_dataset.coco, ["bbox"]
             )  # initialize evaluator with ground truths
@@ -517,7 +517,7 @@ if __name__ == "__main__":
         trainer = Trainer(
             precision=args.precision, logger=logger, gpus=1, max_epochs=-1
         )
-        if "visual_genome" in args.data_path:
+        if "viet_sgg" in args.data_path:
             test_dataset = VGDetection(
                 data_folder=args.data_path,
                 feature_extractor=feature_extractor,
@@ -540,3 +540,5 @@ if __name__ == "__main__":
         if trainer.is_global_zero:
             print("### Evaluation")
         trainer.test(module, dataloaders=test_dataloader)
+
+#  python pretrain_detr.py --data_path viet_sgg --output_path output/pretrain --backbone_dirpath detection_models --memo memo --gpus 2 --architecture deformable-detr
